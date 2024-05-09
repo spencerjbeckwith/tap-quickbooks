@@ -25,7 +25,8 @@ setup(name='tap-quickbooks',
           'xmltodict==0.11.0',
           'jsonpath-ng==1.4.3',
           'pytz==2018.4',
-          'attrs==20.2.0'
+          'attrs==20.2.0',
+          'boto3==1.34.101',
       ],
       entry_points='''
           [console_scripts]

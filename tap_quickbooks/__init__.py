@@ -13,20 +13,22 @@ from tap_quickbooks.quickbooks.exceptions import (
 LOGGER = singer.get_logger()
 
 REQUIRED_CONFIG_KEYS = [
-                        'refresh_token',
                         'client_id',
                         'client_secret',
                         'start_date',
                         'realmId',
-                        'select_fields_by_default'
+                        'select_fields_by_default',
+                        'aws_region',
+                        'refresh_token_secret',
                         ]
 
 CONFIG = {
-    'refresh_token': None,
     'client_id': None,
     'client_secret': None,
     'start_date': None,
-    'include_deleted': None
+    'include_deleted': None,
+    'aws_region': None,
+    'refresh_token_secret': None,
 }
 
 REPLICATION_KEY="MetaData.LastUpdatedTime"
@@ -269,7 +271,6 @@ def main_impl():
     qb = None
     try:
         qb = Quickbooks(
-            refresh_token=CONFIG['refresh_token'],
             qb_client_id=CONFIG['client_id'],
             qb_client_secret=CONFIG['client_secret'],
             quota_percent_total=CONFIG.get('quota_percent_total'),
@@ -285,7 +286,10 @@ def main_impl():
             gl_full_sync = CONFIG.get('gl_full_sync'),
             gl_weekly = CONFIG.get('gl_weekly', False),
             gl_daily = CONFIG.get('gl_daily', False),
-            gl_basic_fields = CONFIG.get('gl_basic_fields', False))
+            gl_basic_fields = CONFIG.get('gl_basic_fields', False),
+            refresh_token_secret = CONFIG.get('refresh_token_secret'),
+            aws_region = CONFIG.get('aws_region'),
+        )
         qb.login()
 
         if args.discover:

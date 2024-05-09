@@ -9,6 +9,8 @@ from requests.exceptions import RequestException
 import singer
 import singer.utils as singer_utils
 import os;
+import boto3
+import copy
 from typing import Dict
 from singer import metadata, metrics
 from tap_quickbooks.quickbooks.reportstreams.MonthlyBalanceSheetReport import MonthlyBalanceSheetReport
@@ -229,7 +231,6 @@ def field_to_property_schema(field, mdata):  # pylint:disable=too-many-branches
 class Quickbooks():
     # pylint: disable=too-many-instance-attributes,too-many-arguments
     def __init__(self,
-                 refresh_token=None,
                  token=None,
                  qb_client_id=None,
                  qb_client_secret=None,
@@ -246,6 +247,8 @@ class Quickbooks():
                  gl_weekly = None,
                  gl_daily = None,
                  gl_basic_fields = None,
+                 refresh_token_secret = None,
+                 aws_region = None,
                  realm_id=None):
         self.api_type = api_type.upper() if api_type else None
         self.report_period_days = report_period_days
@@ -256,10 +259,11 @@ class Quickbooks():
         self.gl_basic_fields = gl_basic_fields
         self.include_deleted = include_deleted
         self.realm_id = realm_id
-        self.refresh_token = refresh_token
         self.token = token
         self.qb_client_id = qb_client_id
         self.qb_client_secret = qb_client_secret
+        self.refresh_token_secret = refresh_token_secret
+        self.aws_region = aws_region
         self.session = requests.Session()
         self.access_token = None
 
@@ -335,7 +339,15 @@ class Quickbooks():
             LOGGER.info("Making %s request to %s with params: %s", http_method, url, params)
             resp = self.session.get(url, headers=headers, stream=stream, params=params)
         elif http_method == "POST":
-            LOGGER.info("Making %s request to %s with body %s", http_method, url, body)
+            # Don't expose sensitive info in our log files
+            logged_body = copy.deepcopy(body)
+            if 'client_secret' in logged_body:
+                logged_body['client_secret'] = '********'
+            if 'refresh_token' in logged_body:
+                logged_body['refresh_token'] = '********'
+            if 'access_token' in logged_body:
+                logged_body['access_token'] = '********'
+            LOGGER.info("Making %s request to %s with body %s", http_method, url, logged_body)
             resp = self.session.post(url, headers=headers, data=body)
         else:
             raise TapQuickbooksException("Unsupported HTTP method")
@@ -357,8 +369,18 @@ class Quickbooks():
         else:
             login_url = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 
+        # Attempt to load secret from AWS Secrets Manager
+        LOGGER.info("Retrieving refresh token from AWS Secrets Manager")
+        boto_client = boto3.session.Session().client(
+            service_name='secretsmanager',
+            region_name=self.aws_region,
+        )
+        refresh_token = boto_client.get_secret_value(
+            SecretId=self.refresh_token_secret,
+        )['SecretString']
+
         login_body = {'grant_type': 'refresh_token', 'client_id': self.qb_client_id,
-                      'client_secret': self.qb_client_secret, 'refresh_token': self.refresh_token}
+                      'client_secret': self.qb_client_secret, 'refresh_token': refresh_token}
 
         LOGGER.info("Attempting login via OAuth2")
 
@@ -375,28 +397,14 @@ class Quickbooks():
 
             new_refresh_token = auth['refresh_token']
 
-            # persist access_token
-            parser = argparse.ArgumentParser()
-            parser.add_argument('-c', '--config', help='Config file', required=True)
-            _args, unknown = parser.parse_known_args()
-            config_file = _args.config
-            config_content = read_json_file(config_file)
-            config_content['access_token'] = self.access_token
-            write_json_file(config_file, config_content)
-
-            # Check if the refresh token is update, if so update the config file with new refresh token.
-            if new_refresh_token != self.refresh_token:
-                LOGGER.info(f"Old refresh token [{self.refresh_token}] expired.")
-                LOGGER.info("New Refresh token: {}".format(new_refresh_token))
-                parser = argparse.ArgumentParser()
-                parser.add_argument('-c', '--config', help='Config file', required=True)
-                _args, unknown = parser.parse_known_args()
-                config_file = _args.config
-                config_content = read_json_file(config_file)
-                config_content['refresh_token'] = new_refresh_token
-                write_json_file(config_file, config_content)
-
-            self.refresh_token = new_refresh_token
+            # Check if the refresh token is updated, if so update it in secrets manager
+            if new_refresh_token != refresh_token:
+                LOGGER.info(f"Old refresh token expired.")
+                boto_client.update_secret(
+                    SecretId=self.refresh_token_secret,
+                    SecretString=new_refresh_token,
+                )
+                LOGGER.info("New refresh token saved to AWS Secrets Manager.")
 
         except Exception as e:
             error_message = str(e)
