@@ -1,54 +1,41 @@
 # tap-quickbooks
 
-[Singer](https://www.singer.io/) tap that extracts data from a [Quickbooks](https://www.quickbooks.com/) database and produces JSON-formatted data following the [Singer spec](https://github.com/singer-io/getting-started/blob/master/SPEC.md).
+This is a fork of [the original tap-quickbooks](https://github.com/hotgluexyz/tap-quickbooks) to add proper secret management of the Quickbooks refresh token so it will work properly with [meltano](https://meltano.com). By only writing an updated refresh token to a file, the tap would break after 24 hours because it wasn't properly reflected in the environment when it was updated. This version instead reads/writes the refresh_token to AWS Secrets Manager. The configuration is adjusted to reflect this.
 
-```bash
-$ mkvirtualenv -p python3 tap-quickbooks
-$ pip install tap-quickbooks
-$ tap-quickbooks --config config.json --discover
-$ tap-quickbooks --config config.json --properties properties.json --state state.json
+## Usage with Meltano
+
+You will want to create a custom plugin using this repository's URL. 
+
+`meltano add extractor --custom tap-quickbooks`
+
+For pip_url, enter `git+https://github.com/spencerjbeckwith/tap-quickbooks.git`. Other options can remain their defaults and you can add your configuration and secrets to meltano.yml after the fact.
+
+Example configuration from meltano.yml, including all necessary config:
+
+```yml
+plugins:
+  extractors:
+  - name: tap-quickbooks
+    namespace: tap-quickbooks
+    pip_url: git+https://github.com/spencerjbeckwith/tap-quickbooks.git
+    executable: tap-quickbooks
+    config:
+      select_fields_by_default: true
+      start_date: '2024-05-01T00:00:00Z'
+      realmId: # from quickbooks
+      aws_region: us-east-2 # or whatever region your secret is in
+      refresh_token_secret: quickbooks_tap_refresh_token # or whatever you've named the secret
+      # is_sandbox: true
+    # Specifying these settings will load them from your .env
+    settings:
+      - name: client_id
+        sensitive: true
+      - name: client_secret
+        sensitive: true
+      - name: aws_access_key_id
+        sensitive: true
+      - name: aws_secret_access_key
+        sensitive: true
 ```
 
-# Quickstart
-
-## Install the tap
-
-```
-> pip install tap-quickbooks
-```
-
-## Create a Config file
-
-```
-{
-  "client_id": "secret_client_id",
-  "client_secret": "secret_client_secret",
-  "refresh_token": "abc123",
-  "realmId": "123456789012345678901234567890"
-  "start_date": "2017-11-02T00:00:00Z",
-  "api_type": "REST",
-  "select_fields_by_default": true
-}
-```
-
-The `client_id` and `client_secret` keys are your OAuth Quickbooks App secrets. The `refresh_token` is a secret created during the OAuth flow. For more info on the Quickbooks OAuth flow, visit the [Quickbooks documentation](https://developer.quickbooks.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_understanding_web_server_oauth_flow.htm).
-
-The `start_date` is used by the tap as a bound on SOQL queries when searching for records.  This should be an [RFC3339](https://www.ietf.org/rfc/rfc3339.txt) formatted date-time, like "2018-01-08T00:00:00Z". For more details, see the [Singer best practices for dates](https://github.com/singer-io/getting-started/blob/master/BEST_PRACTICES.md#dates).
-
-The `api_type` should always be set to "REST". When new fields are discovered in Quickbooks objects, the `select_fields_by_default` key describes whether or not the tap will select those fields by default.
-
-## Run Discovery
-
-To run discovery mode, execute the tap with the config file.
-
-```
-> tap-quickbooks --config config.json --discover > properties.json
-```
-
-## Sync Data
-
-To sync data, select fields in the `properties.json` output and run the tap.
-
-```
-> tap-quickbooks --config config.json --properties properties.json [--state state.json]
-```
+Note that your AWS secret must be stored in plaintext, not JSON format.
